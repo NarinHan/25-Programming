@@ -123,7 +123,11 @@ parse_arg(int argc, char * argv[], config_t * config)
         return EXIT_FAILURE ; 
     }
 
-    printf("[CHECK] Argument parsing results: %s ... %s ... %d ... %s\n", config->input_dir, config->output_dir, config->timelim, config->target_src) ;
+    printf("[CHECK] Argument parsing results:\n") ;
+    printf("- Input directory: %s\n", config->input_dir) ;
+    printf("- Answer directory: %s\n", config->output_dir) ;
+    printf("- Time limit: %d\n", config->timelim) ;
+    printf("- Target source file name: %s\n", config->target_src) ;
 
     return EXIT_SUCCESS ;
 }
@@ -191,7 +195,7 @@ compile_target(config_t * config)
     execlp("gcc", "gcc", "-fsanitize=address", "-o", "target", config->target_src, (char *) NULL) ;
     error_exit("execlp") ; /* if we get here, something went wrong */
 
-    return EXIT_SUCCESS ;
+    return EXIT_FAILURE ;
 }
 
 int
@@ -200,7 +204,7 @@ run_compilation_child()
     int status ; 
     switch (child_pid = fork()) {
         case -1:
-            error_exit("Fork for compilation process") ;
+            return error_exit("Fork for compilation process") ;
         
         case 0:
             compile_target(&config) ;
@@ -208,12 +212,12 @@ run_compilation_child()
         
         default:
             if (wait(&status) == -1)
-                error_exit("Wait for compilation process") ;
+                return error_exit("Wait for compilation process") ;
 
             if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
                 result.compile_err_cnt++ ;
                 // TODO: compile error message should be printed
-                error_exit("Compilation") ;
+                return error_exit("Compilation") ;
             }
             break ;
     }
@@ -278,13 +282,14 @@ calculate_exec_time(result_t * result)
 int 
 print_results()
 {
-    printf("============ TOTAL RESULTS ============\n") ;
+    printf("=============== TOTAL RESULTS ===============\n") ;
+    printf("Compile error                       : %d\n", result.compile_err_cnt) ;
     printf("Timeout                             : %d\n", result.timeout_cnt) ;
     printf("Runtime error                       : %d\n", result.runtime_err_cnt) ;
     printf("Wrong answer                        : %d\n", result.wrong_cnt) ;
     printf("Correct answer                      : %d\n", result.correct_cnt) ;
     printf("Running time (correct answers only) : %ld ms\n", result.time_acc) ;
-    printf("=======================================\n") ;
+    printf("=============================================\n") ;
 
     return EXIT_SUCCESS ;
 }
@@ -301,7 +306,7 @@ read_and_compare_results(int src_fd, char * filename)
     int fd = open(answer_filepath, O_RDONLY) ;
     if (fd == -1) {
         fprintf(stderr, "Error opening answer file.\n") ;
-        return -1 ;
+        return EXIT_FAILURE ;
     }
     size_t fread_chk ;
     
@@ -309,12 +314,12 @@ read_and_compare_results(int src_fd, char * filename)
         fread_chk = read(fd, file_buf, BUFSIZE) ;
         if (fread_chk == -1) {
             fprintf(stderr, "Error reading.\n") ;
-            return -1 ;
+            return EXIT_FAILURE ;
         } 
     
-        if (strncmp(read_buf, file_buf, fread_chk) != 0) {
+        if (memcmp(read_buf, file_buf, fread_chk) != 0) { 
             result.wrong_cnt++ ;
-            return -1 ;
+            return EXIT_FAILURE ;
         }
 
         read_all += read_chk ;  
@@ -323,7 +328,7 @@ read_and_compare_results(int src_fd, char * filename)
     }
     if (read_chk == -1) {
         fprintf(stderr, "Error reading.\n") ;
-        return -1 ;
+        return EXIT_FAILURE ;
     }
     
     close(fd) ;
@@ -339,70 +344,70 @@ run_execution_child()
     struct dirent *entry ;
     DIR *dir = opendir(config.input_dir) ;
     if (!(dir))
-        error_exit("Opening directory") ;
+        return error_exit("Opening directory") ;
 
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_type == DT_REG) {
             int ptoc_fd[2] ; // parent writes, child reads
             if (pipe(ptoc_fd) == -1) /* create the pipe */
-                error_exit("Pipe ptoc") ;
+                return error_exit("Pipe ptoc") ;
             
             int ctop_fd[2] ; // child writes, parent reads 
             if (pipe(ctop_fd) == -1)
-                error_exit("Pipe ctop") ;
+                return error_exit("Pipe ctop") ;
 
             int time_fd[2] ; // pipe for time checking; child writes, parent reads
             if (pipe(time_fd) == -1) 
-                error_exit("Pipe time") ;
+                return error_exit("Pipe time") ;
 
             // create child process for execution
             switch (child_pid = fork()) {
                 case -1:
-                    error_exit("Fork for executing process") ;
+                    return error_exit("Fork for executing process") ;
                 
                 case 0: // child
                     if (close(ptoc_fd[1]) == -1) // close unused write end for child
-                        error_exit("Close for ptoc write end") ;
+                        return error_exit("Close for ptoc write end") ;
                     
                     if (close(ctop_fd[0]) == -1) // close unused read end for child
-                        error_exit("Close for ctop read end") ;
+                        return error_exit("Close for ctop read end") ;
 
                     if (close(time_fd[0]) == -1)
-                        error_exit("Close for time pipe read end") ;
+                        return error_exit("Close for time pipe read end") ;
     
                     if (dup2(ptoc_fd[0], STDIN_FILENO) < 0) // redirect stdin to read from ptoc pipe
-                        error_exit("dup2 stdin") ;
+                        return error_exit("dup2 stdin") ;
                     close(ptoc_fd[0]) ;
 
                     if (dup2(ctop_fd[1], STDOUT_FILENO) < 0)  // redirect stdout to write to ctop pipe
-                        error_exit("dup2 stdout") ;
+                        return error_exit("dup2 stdout") ;
                     close(ctop_fd[1]) ;
 
                     if (gettimeofday(&(config.tv_start), NULL) == -1)
-                        error_exit("gettimeofday") ;
+                        return error_exit("gettimeofday") ;
                     if (write(time_fd[1], &(config.tv_start), sizeof(struct timeval)) < 0)
-                        error_exit("Write starting time of the execution") ;
+                        return error_exit("Write starting time of the execution") ;
                     close(time_fd[1]) ;
 
                     execlp("./target", "target", (char *) NULL) ;
-                    error_exit("execlp") ; /* if we get here, something went wrong */
+                    return error_exit("execlp") ; /* if we get here, something went wrong */
                 
                 default: // parent
                     if (sigaction(SIGALRM, &(config.timer_sa), NULL) == -1) // set up timer
-                        error_exit("sigaction") ;
+                        return error_exit("sigaction") ;
 
                     if (close(ptoc_fd[0]) == -1) // close unused read end for parent
-                        error_exit("Close for ptoc read end") ;
+                        return error_exit("Close for ptoc read end") ;
                 
                     if (close(ctop_fd[1]) == -1) // close unused write end for parent
-                        error_exit("Close for ctop write end") ;
+                        return error_exit("Close for ctop write end") ;
                     
                     if (close(time_fd[1]) == -1)
-                        error_exit("Close for time pipe write end") ;
+                        return error_exit("Close for time pipe write end") ;
                     
                     // receive the starting time from the child
                     if (read(time_fd[0], &(config.tv_start), sizeof(struct timeval)) < 0) 
-                        error_exit("Read starting time of the execution") ;
+                        return error_exit("Read starting time of the execution") ;
                     close(time_fd[0]) ;
     
                     char input_filepath[BUFSIZE] ;
@@ -411,7 +416,7 @@ run_execution_child()
                     // write_bytes() will read the file and write the data to the pipe
                     int write_chk = write_bytes(input_filepath, ptoc_fd[1]) ;
                     if (write_chk < 0)
-                        error_exit("Write to child") ;
+                        return error_exit("Write to child") ;
                     close(ptoc_fd[1]) ;
     
                     int status, ret ;
@@ -424,22 +429,22 @@ run_execution_child()
                     } while (ret == -1 && errno == EINTR) ;
                     
                     if (ret == -1)
-                        error_exit("Wait for execution process") ;
+                        return error_exit("Wait for execution process") ;
 
                     if (WIFEXITED(status)) {
                         int exit_code = WEXITSTATUS(status) ;
                         if (exit_code != 0) {
                             int read_chk = read_bytes(ctop_fd[0]) ;
                             if (read_chk < 0)
-                                error_exit("Read from child") ;
+                                return error_exit("Read from child") ;
                             fprintf(stderr, "Runtime error detected!\n") ;
                             result.runtime_err_cnt++ ;
                         } else {
                             if (read_and_compare_results(ctop_fd[0], entry->d_name)) {
                                 if (gettimeofday(&(config.tv_end), NULL) == -1)
-                                    error_exit("gettimeofday") ;
+                                    return error_exit("gettimeofday") ;
                                 if (calculate_exec_time(&result) < 0)
-                                    error_exit("Calculating execution time") ;
+                                    return error_exit("Calculating execution time") ;
                             } 
                         }
                     } else if (WIFSIGNALED(status)) { // child process was killed by a signal
@@ -463,29 +468,33 @@ run_execution_child()
 int 
 main(int argc, char * argv[])
 {   
-    if (parse_arg(argc, argv, &config) == EXIT_FAILURE)
-        exit(EXIT_FAILURE) ;
+    if (parse_arg(argc, argv, &config))
+        goto err ;
 
-    if (check_directory(config.input_dir) == EXIT_FAILURE)
-        exit(EXIT_FAILURE) ;
+    if (check_directory(config.input_dir))
+        goto err ;
 
-    if (check_directory(config.output_dir) == EXIT_FAILURE)
-        exit(EXIT_FAILURE) ;
+    if (check_directory(config.output_dir))
+        goto err ;
 
-    if (set_timer(&config) == EXIT_FAILURE) 
-        exit(EXIT_FAILURE) ;
+    if (set_timer(&config)) 
+        goto err ;
     
-    if (set_sigaction(&config) == EXIT_FAILURE)
-        exit(EXIT_FAILURE) ;
+    if (set_sigaction(&config))
+        goto err ;
     
     if (run_compilation_child() == EXIT_FAILURE) 
-        exit(EXIT_FAILURE) ;
+        goto err ;
 
-    if (run_execution_child() == EXIT_FAILURE) 
-        exit(EXIT_FAILURE) ;
+    sleep(1) ;
+    if (run_execution_child()) 
+        goto err ;
+    
+    print_results() ;
 
-    if (!(print_results()))
-        exit(EXIT_FAILURE) ;
+err :
+    print_results() ;
+    exit(EXIT_FAILURE) ;
 
     return EXIT_SUCCESS ;
 }
