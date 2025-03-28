@@ -95,19 +95,46 @@ write_bytes (int dest, const config_t config)
         offset += sizeof(int) * ROWS ;
     }
 
-    int total = 0, written ;
+    int total = 0, chk ;
     int towrite = offset ;
 
     while (total < towrite) {
-        written = write(dest, buf + total, towrite - total) ;
-        if (written <= 0) {
+        chk = write(dest, buf + total, towrite - total) ;
+        if (chk <= 0) {
             err_msg = "Writing to the agent" ;
-            return - 1 ;
+            return -1 ;
         }
-        total += written ;
+        total += chk ;
     }
 
     return total ;
+}
+
+int
+read_bytes (int src, char * selected) 
+{
+    char buf[BUFSIZE] ;
+    int total = 0, chk ;
+
+    while (total < 1) {
+        chk = read(src, buf + total, BUFSIZE - total) ;
+        if (chk <= 0) {
+            err_msg = "Reading from the agent" ;
+            return -1 ;
+        }
+        total += chk ;
+    }
+
+    char column = buf[0] ;
+    if ((column >= 'A' && column <= 'G') || (column >= 'a' && column <= 'g')) {
+        * selected = column ;
+        return EXIT_SUCCESS ;
+    } else {
+        err_msg = "Invalid column received" ;
+        return -1 ;
+    }
+    
+    return EXIT_SUCCESS ;
 }
 
 int
@@ -127,7 +154,7 @@ init_config (config_t * config)
             config->opponent_id = X ;
             break ;
         default :
-            return error_exit("Setting player ID in the first round") ;
+            return error_exit("[ERROR] Setting player ID in the first round") ;
     }
 
     return EXIT_SUCCESS ;
@@ -139,9 +166,20 @@ update_map (char selected, config_t * config)
     printf("turn: %d\n", config->turn) ;
     printf("player now: %d\n", config->player_id) ;
     printf("selected: %c\n", selected) ;
-    int selected_num = selected - 'A' ;
+
+    int selected_num ;
+    if (selected >= 'a' && selected <= 'g') {
+        selected_num = selected - 'a' ;
+    } else if (selected >= 'A' && selected <= 'G') {
+        selected_num = selected - 'A' ;
+    } else {
+        return error_exit("[ERROR] Column should be A to G...") ;
+    }
 
     for (int r = ROWS - 1; r >= 0; r--) {
+        if (config->map[selected_num][0] != BLANK) {
+            return error_exit("[ERROR] Selected the column that is full...") ;
+        }
         if (config->map[selected_num][r] == BLANK) {
             config->map[selected_num][r] = config->player_id ;
             break ;
@@ -166,13 +204,11 @@ update_player (config_t * config)
             config->opponent_id = Y ;
             break ;
         default :
-            return error_exit("Setting player ID") ;
+            return error_exit("[ERROR] Setting player ID") ;
     }
     
     return EXIT_SUCCESS ;
 }
-
-
 
 int 
 check_win (int col, int row, config_t config)
@@ -241,17 +277,17 @@ int
 run_child ()
 {
     if (close(ptoc_fd[1]) == -1) 
-        return error_exit("Close for ptoc write end") ;
+        return error_exit("[ERROR] Close for ptoc write end") ;
 
     if (close(ctop_fd[0]) == -1) 
-        return error_exit("Close for ctop read end") ;
+        return error_exit("[ERROR] Close for ctop read end") ;
     
     if (dup2(ptoc_fd[0], STDIN_FILENO) < 0) 
-        return error_exit("dup2 stdin") ;
+        return error_exit("[ERROR] dup2 stdin") ;
     close(ptoc_fd[0]) ;
     
     if (dup2(ctop_fd[1], STDOUT_FILENO) < 0) 
-        return error_exit("dup2 stdout") ;
+        return error_exit("[ERROR] dup2 stdout") ;
     close(ctop_fd[1]) ;
 
     if (config.player_id == X)
@@ -259,46 +295,40 @@ run_child ()
     else
         execlp("./agent2", "agent2", (char *) NULL) ;
     
-    return error_exit("Executing agent") ;
+    return error_exit("[ERROR] Executing agent") ;
 }
 
 int
 run_parent () 
 {
     if (close(ptoc_fd[0]) == -1) 
-        return error_exit("Close for ptoc read end") ;
+        return error_exit("[ERROR] Close for ptoc read end") ;
     if (close(ctop_fd[1]) == -1) 
-        return error_exit("Close for ctop write end") ;
+        return error_exit("[ERROR] Close for ctop write end") ;
     
     if (config.turn == 0) {
         config.player_id = select_random_player() ;
         if (init_config(&config)) 
-            return error_exit("Initializing the player ID and the map") ;
+            return error_exit("[ERROR] Initializing the player ID and the map") ;
     }
         
     int write_chk = write_bytes(ptoc_fd[1], config) ;
     if (write_chk < 0) 
-        return error_exit("Write to child") ;
+        return error_exit("[ERROR] Write to child") ;
     close(ptoc_fd[1]) ;
 
-    char buf[BUFSIZE] ;
-    int read_chk = read(ctop_fd[0], buf, BUFSIZE) ;
-    if (read_chk <= 0) 
-        return error_exit("Read") ;
-    printf("buf: %s\n", buf) ;
-    
     char selected ;
-    sscanf(buf, "%c", &selected) ;
-
-    printf("read chk: %d\n", read_chk) ;
+    int read_chk = read_bytes(ctop_fd[0], &selected) ;
+    if (read_chk < 0) 
+        return error_exit("[ERROR] Read") ;
     printf("selected column: %c\n", selected) ;
     
     int status ;
     if (wait(&status) == -1) 
-        return error_exit("Wait") ;
+        return error_exit("[ERROR] Wait") ;
     
     if (update_map(selected, &config)) 
-        return error_exit("Updating the map with received input") ;
+        return error_exit("[ERROR] Updating the map with received input") ;
     
     print_map() ;
     
@@ -306,7 +336,7 @@ run_parent ()
         return EXIT_SUCCESS ;
 
     if (update_player(&config))
-        return error_exit("Updating the player ID") ;
+        return error_exit("[ERROR] Updating the player ID") ;
 
     return EXIT_SUCCESS ;
 }
@@ -321,13 +351,13 @@ main (int argc, char * argv[])
     pid_t agent ;
     while (config.turn < (ROWS * COLS) && winner == 0) {
         if (pipe(ptoc_fd) == -1) 
-            return error_exit("Pipe ptoc") ;
+            return error_exit("[ERROR] Pipe ptoc") ;
         if (pipe(ctop_fd) == -1) 
-            return error_exit("Pipe ctop") ;
+            return error_exit("[ERROR] Pipe ctop") ;
 
         switch (agent = fork()) {
             case -1 :
-                return error_exit("Fork") ;
+                return error_exit("[ERROR] Fork") ;
 
             case 0 : 
                 if (run_child()) 
