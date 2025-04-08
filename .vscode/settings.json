@@ -1,9 +1,0 @@
-{
-    "files.associations": {
-        "unistd.h": "c",
-        "wait.h": "c",
-        "signal.h": "c",
-        "dirent.h": "c",
-        "stdio.h": "c"
-    }
-}
