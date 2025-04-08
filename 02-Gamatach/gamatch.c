@@ -9,7 +9,7 @@
 #define ROWS 6
 #define COLS 7
 #define BUFSIZE 512 
-#define TIMEOUT 1
+#define TIMEOUT 3 
 
 typedef enum {
     BLANK,
@@ -102,13 +102,15 @@ write_bytes (int dest, const config_t config)
     char buf[BUFSIZE] ;
     int offset = 0 ;
 
-    memcpy(buf + offset, &(config.player_id), sizeof(int)) ;
-    offset += sizeof(int) ;
+    offset += snprintf(buf + offset, BUFSIZE - offset, "%d ", config.player_id) ;
 
     for (int c = 0; c < COLS; c++) {
-        memcpy(buf + offset, config.map[c], sizeof(int) * ROWS) ;
-        offset += sizeof(int) * ROWS ;
+        for (int r = 0; r < ROWS; r++) {
+            offset += snprintf(buf + offset, BUFSIZE - offset, "%d ", config.map[c][r]) ;
+        }
     }
+
+    offset += snprintf(buf + offset, BUFSIZE - offset, "\n") ;
 
     int total = 0, chk ;
     int towrite = offset ;
@@ -189,6 +191,7 @@ update_map (char selected, config_t * config)
 
     for (int r = ROWS - 1; r >= 0; r--) {
         if (config->map[selected_num][0] != BLANK) {
+            winner = config->opponent_id ;
             return error_exit("[ERROR] Selected the column that is full...") ;
         }
         if (config->map[selected_num][r] == BLANK) {
@@ -302,9 +305,9 @@ run_child ()
     close(ctop_fd[1]) ;
 
     if (config.player_id == X)
-        execlp("./agent1", "agent1", (char *) NULL) ;
+        execlp("./rand_agent", "rand_agent", (char *) NULL) ;
     else
-        execlp("./agent2", "agent2", (char *) NULL) ;
+        execlp("./agent_blue", "agent_blue", (char *) NULL) ;
     
     return error_exit("[ERROR] Executing agent") ;
 }
@@ -328,9 +331,9 @@ run_parent ()
         return error_exit("[ERROR] Write to child") ;
     close(ptoc_fd[1]) ;
 
-   signal(SIGALRM, handle_alarm) ;
-   timeout_flag = 0 ;
-   alarm(TIMEOUT) ; 
+    signal(SIGALRM, handle_alarm) ;
+    timeout_flag = 0 ;
+    alarm(TIMEOUT) ; 
 
     char selected ;
     if (read_bytes(ctop_fd[0], &selected) < 0) {
@@ -395,8 +398,10 @@ main (int argc, char * argv[])
                     goto clean_up ;
 
             default : 
-                if (run_parent())
+                if (run_parent()) {
+                    printf("\\\\ WINNER: Player %d //\n", winner) ;  
                     goto clean_up ;
+                }
         }        
     }
 
